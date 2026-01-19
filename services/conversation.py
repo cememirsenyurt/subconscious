@@ -232,18 +232,26 @@ class ConversationManager:
                 print(f"[Memory] Remembered seating preference: {info['seating_preference']}")
                 break
         
-        # Detect if this is a booking/reservation request OR they claim to have one
-        booking_keywords = ['book', 'reserve', 'reservation', 'appointment', 'schedule', 'make a']
-        has_reservation_phrases = ['my reservation', 'my appointment', 'my booking', 'i have a reservation', 
-                                   'i have an appointment', 'i booked', 'i reserved', 'i made a reservation']
+        # Distinguish between CREATING a new reservation vs LOOKING UP an existing one
         
-        if any(kw in msg_lower for kw in booking_keywords):
-            info["has_reservation"] = True
-            print(f"[Memory] Noted: Customer is making a reservation")
+        # Phrases that mean they WANT TO CREATE a new booking
+        creating_phrases = ['want to book', 'want to make', 'want to reserve', 'like to book', 
+                           'like to make', 'like to reserve', 'need to book', 'need to make',
+                           'can i book', 'can i make', 'can i reserve', 'make a reservation',
+                           'book a table', 'book a room', 'schedule an appointment', 'need an appointment']
         
-        if any(phrase in msg_lower for phrase in has_reservation_phrases):
+        # Phrases that mean they ALREADY HAVE a booking
+        has_existing_phrases = ['my reservation', 'my appointment', 'my booking', 'i have a reservation', 
+                               'i have an appointment', 'i have a booking', 'i booked', 'i reserved', 
+                               'i made a reservation', 'check my', 'look up my', 'find my']
+        
+        if any(phrase in msg_lower for phrase in creating_phrases):
+            info["wants_to_book"] = True
+            print(f"[Memory] Noted: Customer WANTS TO CREATE a new reservation")
+        
+        if any(phrase in msg_lower for phrase in has_existing_phrases):
             info["claims_existing_reservation"] = True
-            print(f"[Memory] Noted: Customer claims to have an existing reservation")
+            print(f"[Memory] Noted: Customer claims to ALREADY HAVE a reservation")
     
     def _lookup_customer_in_db(self, session_id: str):
         """Look up customer in global database if we have their name."""
@@ -382,12 +390,24 @@ class ConversationManager:
         
         return "\n".join(parts) if len(parts) > 1 else ""
     
-    def has_reservation_info(self, session_id: str) -> bool:
-        """Check if we have any reservation details stored."""
+    def has_complete_reservation(self, session_id: str) -> bool:
+        """Check if we have COMPLETE reservation details (not just partial)."""
         if session_id not in self.conversations:
             return False
         info = self.conversations[session_id]["customer_info"]
-        return info.get("has_reservation") or info.get("reservation_date") or info.get("reservation_time")
+        
+        # Only consider it a "complete" reservation if we have enough details
+        # Need at least: name + (date or time)
+        has_name = bool(info.get("name"))
+        has_date = bool(info.get("reservation_date"))
+        has_time = bool(info.get("reservation_time"))
+        
+        # If they found in database, we have their info
+        if info.get("found_in_database") and has_name:
+            return True
+        
+        # Otherwise need name plus at least date or time that was explicitly given
+        return has_name and (has_date or has_time)
     
     def build_full_context(self, session_id: str, current_message: str) -> str:
         """Build the complete context string for the API call."""
@@ -418,8 +438,12 @@ class ConversationManager:
         parts.append(f"\n[CURRENT MESSAGE FROM CUSTOMER]")
         parts.append(f"Customer: {current_message}")
         
-        # Check if customer is asking about a reservation we don't have
-        has_reservation = self.has_reservation_info(session_id)
+        # Check reservation status
+        has_complete_reservation = self.has_complete_reservation(session_id)
+        info = conv.get("customer_info", {})
+        wants_to_book = info.get("wants_to_book", False)
+        claims_existing = info.get("claims_existing_reservation", False)
+        has_name = bool(info.get("name"))
         
         # Instructions for response
         parts.append(f"""
@@ -433,12 +457,19 @@ class ConversationManager:
 7. Do not include role labels like "Agent:" - just speak directly
 
 [HANDLING RESERVATIONS]
-{f"You have the customer's reservation details above - use them! Say 'Yes, I have your reservation right here!' and give the specific details." if has_reservation else '''IMPORTANT: The customer does NOT have an existing reservation in our system.
-- Do NOT claim to have their reservation if they never made one
-- Do NOT say "I have your reservation right here" unless they actually booked one
-- If they want to make a NEW appointment/reservation, help them book one
-- If they ask about an appointment they claim to have, politely ask for details to help locate it
-- Be honest - if you don't have their booking info, ask them to provide details or help them make a new one'''
+{f"RETURNING CUSTOMER: You have their complete reservation details above - confirm them!" if has_complete_reservation else f'''{"CUSTOMER WANTS TO BOOK: They want to CREATE a new reservation. You MUST ask for missing information BEFORE confirming anything:" if wants_to_book else ""}
+{"- Ask for their NAME first if you don't have it" if not has_name else ""}
+{"- Ask what DATE/TIME they prefer" if not info.get("reservation_date") and not info.get("reservation_time") else ""}
+{"- Ask how many GUESTS/PEOPLE" if not info.get("party_size") else ""}
+{"- Only CONFIRM the booking once you have: name, date/time, and party size" if wants_to_book else ""}
+
+{"CUSTOMER CLAIMS EXISTING RESERVATION: Ask for their NAME to look it up." if claims_existing and not has_name else ""}
+
+CRITICAL RULES:
+- NEVER say "I have your reservation right here" unless you actually have their name + date + time above
+- If they say "I want to make a reservation" - that means they DON'T have one yet, ASK for details!
+- Always gather: NAME, DATE/TIME, PARTY SIZE before confirming any booking
+- Be helpful and conversational while collecting this information'''
 }""")
 
         return "\n".join(parts)
