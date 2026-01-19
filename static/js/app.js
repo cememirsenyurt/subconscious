@@ -308,6 +308,10 @@ function speak(text, callback) {
 async function sendMessage(message) {
     if (!message.trim()) return;
     
+    // Check if web search is enabled
+    const searchToggle = document.getElementById('searchToggle');
+    const useSearch = searchToggle?.checked || false;
+    
     try {
         const response = await fetch('/api/chat', {
             method: 'POST',
@@ -318,12 +322,17 @@ async function sendMessage(message) {
                 message: message,
                 business_id: state.currentBusiness?.id || 'hotel',
                 session_id: state.sessionId,
+                use_search: useSearch,  // Enable web search tools
             }),
         });
         
         const data = await response.json();
         
         if (data.success) {
+            // Show sources if web search was used
+            if (data.sources && data.sources.length > 0) {
+                console.log('🔍 Sources:', data.sources);
+            }
             return data.response;
         } else {
             console.error('API error:', data.error);

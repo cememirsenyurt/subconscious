@@ -11,13 +11,13 @@ Contains business logic and external integrations:
 from .conversation import conversation_manager
 from .customer_db import customer_db
 from .memory import smart_memory
-from .subconscious_api import call_subconscious_api, search_for_info, stream_subconscious_response
+from .subconscious_api import call_subconscious_api, search_web, stream_subconscious_response
 
 __all__ = [
     'conversation_manager',
     'customer_db', 
     'smart_memory',
     'call_subconscious_api',
-    'search_for_info',
+    'search_web',
     'stream_subconscious_response',
 ]

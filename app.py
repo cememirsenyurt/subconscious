@@ -25,7 +25,7 @@ from flask import Flask
 
 from config import Config, SUBCONSCIOUS_API_KEY, DEFAULT_ENGINE
 from models import BUSINESSES
-from routes import main_bp, chat_bp, transcribe_bp, debug_bp
+from routes import main_bp, chat_bp, transcribe_bp, debug_bp, tools_bp
 
 
 def create_app() -> Flask:
@@ -43,6 +43,7 @@ def create_app() -> Flask:
     app.register_blueprint(chat_bp)
     app.register_blueprint(transcribe_bp)
     app.register_blueprint(debug_bp)
+    app.register_blueprint(tools_bp)  # Custom tools for Subconscious function calling
     
     return app
 

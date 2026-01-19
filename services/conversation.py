@@ -25,13 +25,12 @@ class ConversationManager:
         smart_memory.get_session(session_id, business_id)
         print(f"[Conversation] Created session {session_id} for {business_id}")
     
-    def process_message(self, session_id: str, business_id: str, user_message: str) -> str:
+    def process_message(self, session_id: str, business_id: str, user_message: str, use_search: bool = False) -> str:
         """
-        Process a user message with PARALLEL AI calls:
-        - Response AI: Generates the agent's answer
-        - Extraction AI: Extracts customer information
-        
-        Both run concurrently to save time!
+        Process a user message with smart sequencing:
+        1. Extract customer info
+        2. Lookup returning customers
+        3. Generate response (optionally with web search)
         """
         business = BUSINESSES.get(business_id)
         if not business:
@@ -41,12 +40,20 @@ class ConversationManager:
         def generate_response(message: str, customer_context: str, history: str) -> str:
             prompt = self._build_prompt(business, message, customer_context, history)
             
-            # Enable tools for questions that might need real info
-            needs_search = self._might_need_search(message)
+            # Enable tools if user requested search OR if message needs it
+            needs_search = use_search or self._might_need_search(message)
+            
+            # Build tools list
+            tools = None
+            if needs_search:
+                tools = [
+                    {"type": "platform", "id": "web_search"},
+                    {"type": "platform", "id": "parallel_search"},
+                ]
             
             result = call_subconscious_api(
                 instructions=prompt,
-                enable_tools=needs_search
+                tools=tools
             )
             
             return result.get("answer", "I'm sorry, could you repeat that?")

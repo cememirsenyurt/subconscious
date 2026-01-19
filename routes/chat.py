@@ -2,8 +2,9 @@
 Chat routes for the Voice Agent application.
 
 Handles:
-- Main chat endpoint
+- Main chat endpoint (with optional web search)
 - Streaming chat endpoint
+- Search endpoint for real-time info
 - Reset and greeting endpoints
 """
 
@@ -11,6 +12,7 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from models import BUSINESSES
 from services import conversation_manager, stream_subconscious_response
+from services.subconscious_api import call_subconscious_api, search_web
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -24,7 +26,8 @@ def chat():
     {
         "message": "user message text",
         "business_id": "hotel",
-        "session_id": "unique-session-id"
+        "session_id": "unique-session-id",
+        "use_search": false  // Optional: enable web search
     }
     """
     data = request.get_json()
@@ -35,6 +38,7 @@ def chat():
     message = data.get("message", "").strip()
     business_id = data.get("business_id", "hotel")
     session_id = data.get("session_id", "default")
+    use_search = data.get("use_search", False)
     
     if not message:
         return jsonify({"error": "No message provided"}), 400
@@ -44,7 +48,12 @@ def chat():
     
     # Process message through conversation manager
     # This handles: extraction, memory lookup, context building, API call
-    response = conversation_manager.process_message(session_id, business_id, message)
+    response = conversation_manager.process_message(
+        session_id, 
+        business_id, 
+        message,
+        use_search=use_search  # Pass search flag
+    )
     
     # Clean up any role prefixes that might have leaked through
     for prefix in ["You:", "Assistant:", "Agent:", f"{BUSINESSES[business_id].name}:"]:
@@ -54,7 +63,36 @@ def chat():
     return jsonify({
         "success": True,
         "response": response,
-        "business": BUSINESSES[business_id].name
+        "business": BUSINESSES[business_id].name,
+        "search_enabled": use_search
+    })
+
+
+@chat_bp.route("/api/search", methods=["POST"])
+def search():
+    """
+    Direct web search endpoint.
+    Use this for queries that need real-time information.
+    
+    Expected JSON:
+    {
+        "query": "What are the best restaurants in San Francisco?"
+    }
+    """
+    data = request.get_json() or {}
+    query = data.get("query", "").strip()
+    
+    if not query:
+        return jsonify({"error": "No query provided"}), 400
+    
+    # Use Subconscious with web search tools
+    result = search_web(query)
+    
+    return jsonify({
+        "success": result["success"],
+        "answer": result.get("answer", ""),
+        "sources": result.get("sources", []),
+        "error": result.get("error")
     })
 
 
@@ -68,6 +106,7 @@ def chat_stream():
     message = data.get("message", "").strip()
     business_id = data.get("business_id", "hotel")
     session_id = data.get("session_id", "default")
+    use_search = data.get("use_search", False)
     
     if not message:
         return jsonify({"error": "No message provided"}), 400
@@ -91,8 +130,16 @@ Customer says: {message}
 
 Respond naturally and concisely:"""
     
+    # Build tools list if search is enabled
+    tools = None
+    if use_search:
+        tools = [
+            {"type": "platform", "id": "web_search"},
+            {"type": "platform", "id": "parallel_search"},
+        ]
+    
     return Response(
-        stream_with_context(stream_subconscious_response(instructions)),
+        stream_with_context(stream_subconscious_response(instructions, tools=tools)),
         mimetype="text/event-stream"
     )
 

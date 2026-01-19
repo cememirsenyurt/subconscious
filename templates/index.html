@@ -126,15 +126,23 @@
                     </button>
                 </div>
 
-                <!-- Text Input Fallback -->
+                <!-- Text Input with Search Toggle -->
                 <div class="text-input-container" id="textInputContainer">
-                    <input type="text" id="textInput" placeholder="Type a message or use voice..." autocomplete="off">
-                    <button class="send-button" id="sendButton" aria-label="Send">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="22" y1="2" x2="11" y2="13"/>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                        </svg>
-                    </button>
+                    <div class="input-row">
+                        <input type="text" id="textInput" placeholder="Type a message or use voice..." autocomplete="off">
+                        <button class="send-button" id="sendButton" aria-label="Send">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"/>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="search-toggle">
+                        <label class="toggle-label" title="Enable web search for real-time information">
+                            <input type="checkbox" id="searchToggle">
+                            <span class="toggle-text">🔍 Web Search</span>
+                        </label>
+                    </div>
                 </div>
             </section>
         </main>
