@@ -26,7 +26,7 @@ class CustomerDatabase:
         """Normalize name for lookup (lowercase, stripped)."""
         return name.lower().strip()
     
-    def save_customer(self, name: str, info: Dict):
+    def save_customer(self, name: str, business_id: str, info: Dict):
         """
         Save or update customer information.
         
@@ -37,7 +37,7 @@ class CustomerDatabase:
         if not name:
             return
         
-        key = self.normalize_name(name)
+        key = f"{business_id}:{self.normalize_name(name)}"
         if key not in self.customers:
             self.customers[key] = {}
         
@@ -47,9 +47,10 @@ class CustomerDatabase:
                 self.customers[key][k] = v
         
         self.customers[key]["name"] = name  # Keep original case
+        self.customers[key]["business_id"] = business_id
         print(f"[CustomerDB] Saved customer: {name} -> {self.customers[key]}")
     
-    def find_customer(self, name: str) -> Optional[Dict]:
+    def find_customer(self, name: str, business_id: str) -> Optional[Dict]:
         """
         Look up a customer by name.
         
@@ -62,7 +63,7 @@ class CustomerDatabase:
         if not name:
             return None
         
-        key = self.normalize_name(name)
+        key = f"{business_id}:{self.normalize_name(name)}"
         if key in self.customers:
             print(f"[CustomerDB] Found customer: {name} -> {self.customers[key]}")
             return self.customers[key].copy()

@@ -84,11 +84,18 @@ class ConversationManager:
         """
         Extract key customer information from messages for memory.
         
-        Extracts: names, phone numbers, emails, party sizes, dates, times, seating preferences
+        Flexible extraction - captures any important details mentioned, not just hardcoded fields.
         """
         conv = self.conversations[session_id]
         info = conv["customer_info"]
         msg_lower = message.lower()
+        
+        # Store the raw message for context (last few messages)
+        if "recent_messages" not in info:
+            info["recent_messages"] = []
+        info["recent_messages"].append(message)
+        # Keep only last 5 messages
+        info["recent_messages"] = info["recent_messages"][-5:]
         
         # Extract name patterns - also check for standalone names (just a name as response)
         name_patterns = [
@@ -231,6 +238,29 @@ class ConversationManager:
                 info["seating_preference"] = location
                 print(f"[Memory] Remembered seating preference: {info['seating_preference']}")
                 break
+
+        # Extract membership info (gym / general membership)
+        membership_keywords = ['membership', 'member', 'premium', 'basic', 'plus', 'trial']
+        if any(kw in msg_lower for kw in membership_keywords):
+            # Membership type
+            membership_type_match = re.search(r'\b(basic|plus|premium|trial)\b', msg_lower)
+            if membership_type_match:
+                info["membership_type"] = membership_type_match.group(1).title()
+                print(f"[Memory] Remembered membership type: {info['membership_type']}")
+            elif "membership" in msg_lower:
+                info["membership_type"] = "Membership"
+            
+            # Membership start date (if mentioned)
+            membership_date = re.search(
+                r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?',
+                msg_lower
+            )
+            if membership_date:
+                month = membership_date.group(1).title()
+                day = membership_date.group(2)
+                year = membership_date.group(3) or "2025"
+                info["membership_start_date"] = f"{month} {day}, {year}"
+                print(f"[Memory] Remembered membership start date: {info['membership_start_date']}")
         
         # Distinguish between CREATING a new reservation vs LOOKING UP an existing one
         
@@ -252,20 +282,93 @@ class ConversationManager:
         if any(phrase in msg_lower for phrase in has_existing_phrases):
             info["claims_existing_reservation"] = True
             print(f"[Memory] Noted: Customer claims to ALREADY HAVE a reservation")
+
+        # Membership lookup intent (gym)
+        membership_lookup_phrases = [
+            'do i have a membership', 'check my membership', 'have a membership',
+            'already a member', 'already signed up', 'i signed up', 'member with you',
+            'membership status', 'what membership'
+        ]
+        if any(phrase in msg_lower for phrase in membership_lookup_phrases):
+            info["wants_membership_lookup"] = True
+            print("[Memory] Noted: Customer wants membership lookup")
+        
+        # ============================================
+        # GENERIC DETAIL EXTRACTION (flexible for any business type)
+        # ============================================
+        
+        # Extract ANY date mentioned (flexible)
+        any_date = re.search(
+            r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?',
+            msg_lower
+        )
+        if any_date:
+            month = any_date.group(1).title()
+            day = any_date.group(2)
+            year = any_date.group(3) or "2026"
+            info["date_mentioned"] = f"{month} {day}, {year}"
+            print(f"[Memory] Remembered date: {info['date_mentioned']}")
+        
+        # Extract service types / products mentioned
+        service_patterns = {
+            # Gym
+            'premium': 'Premium',
+            'basic membership': 'Basic',
+            'plus membership': 'Plus',
+            'personal training': 'Personal Training',
+            # Salon
+            'haircut': 'Haircut',
+            'balayage': 'Balayage',
+            'highlights': 'Highlights',
+            'color': 'Hair Color',
+            # Hotel
+            'suite': 'Suite',
+            'deluxe': 'Deluxe Room',
+            'standard room': 'Standard Room',
+            # Medical
+            'check-up': 'Check-up',
+            'physical': 'Physical',
+            'vaccination': 'Vaccination',
+            'appointment': 'Appointment',
+        }
+        for pattern, service_name in service_patterns.items():
+            if pattern in msg_lower:
+                info["service_type"] = service_name
+                print(f"[Memory] Remembered service type: {info['service_type']}")
+                break
+        
+        # Extract any "I have/got/want X" patterns for flexible detail capture
+        have_patterns = [
+            r'i have (?:a |an |the )?(\w+(?:\s+\w+)?)\s+(?:membership|subscription|plan|booking|reservation)',
+            r'i got (?:a |an |the )?(\w+(?:\s+\w+)?)\s+(?:membership|subscription|plan)',
+            r'signed up for (?:a |an |the )?(\w+(?:\s+\w+)?)',
+            r'i\'m (?:a |an )?(\w+)\s+member',
+        ]
+        for pattern in have_patterns:
+            match = re.search(pattern, msg_lower)
+            if match:
+                detail = match.group(1).strip().title()
+                if detail and detail.lower() not in ['a', 'an', 'the', 'my']:
+                    info["service_type"] = detail
+                    info["has_existing_service"] = True
+                    print(f"[Memory] Customer has existing: {detail}")
+                    break
     
     def _lookup_customer_in_db(self, session_id: str):
         """Look up customer in global database if we have their name."""
         if session_id not in self.conversations:
             return
         
-        info = self.conversations[session_id]["customer_info"]
+        conv = self.conversations[session_id]
+        info = conv["customer_info"]
+        business_id = conv.get("business_id", "")
         name = info.get("name")
         
         if not name:
             return
         
         # Look up in global database
-        stored = customer_db.find_customer(name)
+        stored = customer_db.find_customer(name, business_id)
         if stored:
             print(f"[Memory] Found {name} in database! Restoring their info...")
             # Merge stored data into current session (don't overwrite existing non-empty values)
@@ -282,20 +385,30 @@ class ConversationManager:
         if session_id not in self.conversations:
             return
         
-        info = self.conversations[session_id]["customer_info"]
+        conv = self.conversations[session_id]
+        info = conv["customer_info"]
+        business_id = conv.get("business_id", "")
         name = info.get("name")
         
         if not name:
             return
         
         # Save if we have ANY meaningful data (name + anything else)
-        has_data = (info.get("reservation_date") or info.get("reservation_time") or 
-                    info.get("party_size") or info.get("has_reservation") or
-                    info.get("seating_preference") or info.get("phone") or info.get("email"))
+        # Flexible list - saves any customer detail, not just hardcoded fields
+        meaningful_fields = [
+            'reservation_date', 'reservation_time', 'party_size', 'seating_preference',
+            'phone', 'email', 'membership_type', 'membership_start_date', 'service_type',
+            'date_mentioned', 'has_existing_service', 'wants_to_book', 'has_reservation'
+        ]
+        has_data = any(info.get(field) for field in meaningful_fields)
         
         if has_data:
-            print(f"[Memory] Saving {name} to database with: {info}")
-            customer_db.save_customer(name, info)
+            # Create a clean copy without internal tracking fields
+            save_info = {k: v for k, v in info.items() 
+                        if k not in ['recent_messages', 'wants_membership_lookup', 
+                                    'claims_existing_reservation', 'found_in_database']}
+            print(f"[Memory] Saving {name} to database with: {save_info}")
+            customer_db.save_customer(name, business_id, save_info)
     
     def _extract_from_confirmation(self, session_id: str, message: str):
         """Extract booking details from agent confirmation messages."""
@@ -365,7 +478,7 @@ class ConversationManager:
         
         # Build reservation summary if we have any booking details
         reservation_parts = []
-        if info.get("has_reservation") or info.get("reservation_date") or info.get("reservation_time"):
+        if info.get("reservation_date") or info.get("reservation_time"):
             reservation_parts.append("- RESERVATION DETAILS (Customer made this booking in this conversation):")
             if "reservation_date" in info:
                 reservation_parts.append(f"  * Date: {info['reservation_date']}")
@@ -383,10 +496,27 @@ class ConversationManager:
             parts.append(f"- Phone number: {info['phone']}")
         if "email" in info:
             parts.append(f"- Email: {info['email']}")
+
+        # Service/Product details (flexible - works for any business)
+        if info.get("service_type"):
+            parts.append(f"- Service/Product: {info['service_type']}")
+        
+        if info.get("date_mentioned"):
+            parts.append(f"- Date mentioned: {info['date_mentioned']}")
+        
+        # Membership summary (gym or subscription businesses)
+        if info.get("membership_type") or info.get("membership_start_date"):
+            parts.append("- MEMBERSHIP DETAILS:")
+            if "membership_type" in info:
+                parts.append(f"  * Type: {info['membership_type']}")
+            if "membership_start_date" in info:
+                parts.append(f"  * Start date: {info['membership_start_date']}")
+        
+        if info.get("has_existing_service"):
+            parts.append("- NOTE: Customer claims to already have this service/membership with us")
         
         if len(parts) > 1:
-            parts.append("\nIMPORTANT: When the customer asks about their reservation/appointment, tell them the EXACT details from above. You already have this information from their previous visit - use it!")
-            parts.append("Say something like 'Yes, I have your reservation right here!' and give them the specific details.")
+            parts.append("\nIMPORTANT: Use the information above. If the customer asks about their details, provide what you know. If something is missing, ask for it first.")
         
         return "\n".join(parts) if len(parts) > 1 else ""
     
@@ -408,6 +538,21 @@ class ConversationManager:
         
         # Otherwise need name plus at least date or time that was explicitly given
         return has_name and (has_date or has_time)
+
+    def has_complete_membership(self, session_id: str) -> bool:
+        """Check if we have membership details for the customer."""
+        if session_id not in self.conversations:
+            return False
+        info = self.conversations[session_id]["customer_info"]
+        
+        has_name = bool(info.get("name"))
+        has_type = bool(info.get("membership_type"))
+        has_start = bool(info.get("membership_start_date"))
+        
+        if info.get("found_in_database") and has_name and has_type:
+            return True
+        
+        return has_name and (has_type or has_start)
     
     def build_full_context(self, session_id: str, current_message: str) -> str:
         """Build the complete context string for the API call."""
@@ -438,11 +583,13 @@ class ConversationManager:
         parts.append(f"\n[CURRENT MESSAGE FROM CUSTOMER]")
         parts.append(f"Customer: {current_message}")
         
-        # Check reservation status
+        # Check reservation + membership status
         has_complete_reservation = self.has_complete_reservation(session_id)
+        has_complete_membership = self.has_complete_membership(session_id)
         info = conv.get("customer_info", {})
         wants_to_book = info.get("wants_to_book", False)
         claims_existing = info.get("claims_existing_reservation", False)
+        wants_membership_lookup = info.get("wants_membership_lookup", False)
         has_name = bool(info.get("name"))
         
         # Instructions for response
