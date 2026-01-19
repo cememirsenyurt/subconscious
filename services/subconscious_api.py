@@ -144,8 +144,8 @@ def _call_with_http(instructions: str, engine: str, tools: List[Dict]) -> Dict[s
                 "answer": "Something went wrong. Please try again."
             }
         
-        # Poll for completion
-        for i in range(30):
+        # Poll for completion (up to 90 seconds for web searches)
+        for i in range(45):
             time.sleep(2)
             
             status_resp = requests.get(

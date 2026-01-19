@@ -1,8 +1,8 @@
 """
 Conversation Service - Smart Discovery Agents
 
-All agents use Subconscious web search to find REAL businesses,
-then help users make mock bookings/reservations.
+Uses web search ONLY when needed for finding real businesses.
+Simple conversational messages don't need web search.
 """
 
 from typing import Dict
@@ -12,7 +12,7 @@ from .subconscious_api import call_subconscious_api
 
 
 class ConversationManager:
-    """Manages conversations with web-search-powered discovery agents."""
+    """Manages conversations with smart search detection."""
     
     def __init__(self):
         pass
@@ -24,23 +24,36 @@ class ConversationManager:
     
     def process_message(self, session_id: str, business_id: str, user_message: str, use_search: bool = True) -> str:
         """
-        Process a user message with smart discovery.
+        Process a user message with smart search detection.
         
-        Web search is ALWAYS enabled by default for finding real businesses.
+        Web search is used ONLY when the message asks about:
+        - Finding businesses, restaurants, gyms, hotels, etc.
+        - Locations, prices, reviews, availability
+        
+        NOT for simple conversation like "my name is..." or "yes please"
         """
         business = BUSINESSES.get(business_id)
         if not business:
             return "Sorry, this service is not available."
         
-        # Define the response generator - ALWAYS uses web search
+        # Check if this message actually NEEDS web search
+        needs_search = self._needs_web_search(user_message)
+        print(f"[Conversation] Message needs search: {needs_search}")
+        
+        # Define the response generator
         def generate_response(message: str, customer_context: str, history: str) -> str:
-            prompt = self._build_prompt(business, message, customer_context, history)
+            prompt = self._build_prompt(business, message, customer_context, history, needs_search)
             
-            # ALWAYS enable web search tools for real business discovery
-            tools = [
-                {"type": "platform", "id": "web_search"},
-                {"type": "platform", "id": "parallel_search"},
-            ]
+            # Only use tools if we actually need to search
+            tools = None
+            if needs_search:
+                tools = [
+                    {"type": "platform", "id": "web_search"},
+                    {"type": "platform", "id": "parallel_search"},
+                ]
+                print("[Conversation] 🔍 Using web search tools...")
+            else:
+                print("[Conversation] 💬 Simple response, no search needed")
             
             result = call_subconscious_api(
                 instructions=prompt,
@@ -60,47 +73,104 @@ class ConversationManager:
         
         return response
     
-    def _build_prompt(self, business, user_message: str, customer_context: str, history: str) -> str:
-        """Build the prompt with discovery-focused instructions."""
+    def _needs_web_search(self, message: str) -> bool:
+        """
+        Determine if a message needs web search.
+        
+        Returns True for queries about finding businesses, locations, etc.
+        Returns False for simple conversational responses.
+        """
+        msg_lower = message.lower()
+        
+        # Keywords that indicate we need to SEARCH
+        search_triggers = [
+            # Finding businesses
+            "find", "search", "look for", "looking for", "show me",
+            "what are", "where can i", "recommend", "suggestions",
+            "best", "top rated", "popular", "nearby", "near me", "around",
+            
+            # Specific business types
+            "restaurant", "gym", "fitness", "hotel", "property", "house",
+            "clinic", "doctor", "salon", "spa", "barber",
+            
+            # Comparison/research
+            "prices", "membership", "cost", "how much", "reviews",
+            "ratings", "compare", "options", "available",
+            
+            # Location queries
+            "in san", "in los", "in new", "in the", "downtown", "area",
+        ]
+        
+        # Keywords that indicate simple conversation (NO search needed)
+        simple_triggers = [
+            "my name is", "i am", "i'm", "yes", "no", "okay", "ok",
+            "sure", "please", "thank", "hi", "hello", "hey",
+            "that sounds", "i want", "i'd like", "i would like",
+            "book", "reserve", "sign up", "schedule", "confirm",
+            "call me", "my phone", "my email", "contact",
+        ]
+        
+        # If it's clearly a simple response, don't search
+        for trigger in simple_triggers:
+            if msg_lower.startswith(trigger) or trigger in msg_lower[:30]:
+                # But check if they're ALSO asking to find something
+                has_search = any(s in msg_lower for s in ["find", "search", "show", "what", "where"])
+                if not has_search:
+                    return False
+        
+        # Check if any search triggers are present
+        for trigger in search_triggers:
+            if trigger in msg_lower:
+                return True
+        
+        # Default: don't search for short messages
+        if len(message.split()) < 5:
+            return False
+        
+        return False
+    
+    def _build_prompt(self, business, user_message: str, customer_context: str, history: str, searching: bool) -> str:
+        """Build the prompt with appropriate instructions."""
         prompt_parts = [
-            f"You are {business.name}, a smart discovery assistant.",
+            f"You are {business.name}, a helpful discovery assistant.",
             "",
             "YOUR ROLE:",
             business.system_prompt,
             "",
-            "KEY BEHAVIORS:",
-            "- USE WEB SEARCH to find REAL businesses when asked about {category}".format(category=business.category),
-            "- Present real options with names, ratings, prices when available",
-            "- Help the user choose and 'book' with their selection",
-            "- Remember everything they tell you",
-            "- Be conversational - this is a phone call",
-            "",
         ]
         
-        if customer_context:
+        if searching:
             prompt_parts.extend([
-                "CUSTOMER INFORMATION (from our records):",
-                customer_context,
+                "INSTRUCTION: The user wants to find real businesses. USE YOUR WEB SEARCH to find actual options.",
+                "Present 3-5 real results with names, brief descriptions, and ratings if available.",
                 "",
             ])
         else:
             prompt_parts.extend([
-                "CUSTOMER INFORMATION: New customer - get their name and location first.",
+                "INSTRUCTION: This is a conversational response. Be helpful and natural.",
+                "Ask clarifying questions if needed. Keep it brief - this is a phone call.",
+                "",
+            ])
+        
+        if customer_context:
+            prompt_parts.extend([
+                "CUSTOMER INFO:",
+                customer_context,
                 "",
             ])
         
         if history:
             prompt_parts.extend([
-                "CONVERSATION SO FAR:",
+                "CONVERSATION:",
                 history,
                 "",
             ])
         
         prompt_parts.extend([
-            "CUSTOMER SAYS:",
+            "CUSTOMER:",
             user_message,
             "",
-            "YOUR RESPONSE (search if needed, be helpful and natural):",
+            "YOUR RESPONSE:",
         ])
         
         return "\n".join(prompt_parts)
