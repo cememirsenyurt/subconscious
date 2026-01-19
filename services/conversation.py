@@ -1,11 +1,8 @@
 """
-Conversation Service - Manages AI conversations with PARALLEL processing.
+Conversation Service - Smart Discovery Agents
 
-Two Subconscious AI calls run concurrently:
-1. Response Generation - The main agent response
-2. Information Extraction - Extracts customer details
-
-This ensures we capture ALL info while keeping response time fast.
+All agents use Subconscious web search to find REAL businesses,
+then help users make mock bookings/reservations.
 """
 
 from typing import Dict
@@ -15,7 +12,7 @@ from .subconscious_api import call_subconscious_api
 
 
 class ConversationManager:
-    """Manages conversations with parallel AI processing."""
+    """Manages conversations with web-search-powered discovery agents."""
     
     def __init__(self):
         pass
@@ -25,31 +22,25 @@ class ConversationManager:
         smart_memory.get_session(session_id, business_id)
         print(f"[Conversation] Created session {session_id} for {business_id}")
     
-    def process_message(self, session_id: str, business_id: str, user_message: str, use_search: bool = False) -> str:
+    def process_message(self, session_id: str, business_id: str, user_message: str, use_search: bool = True) -> str:
         """
-        Process a user message with smart sequencing:
-        1. Extract customer info
-        2. Lookup returning customers
-        3. Generate response (optionally with web search)
+        Process a user message with smart discovery.
+        
+        Web search is ALWAYS enabled by default for finding real businesses.
         """
         business = BUSINESSES.get(business_id)
         if not business:
-            return "Sorry, this business is not available."
+            return "Sorry, this service is not available."
         
-        # Define the response generator function
+        # Define the response generator - ALWAYS uses web search
         def generate_response(message: str, customer_context: str, history: str) -> str:
             prompt = self._build_prompt(business, message, customer_context, history)
             
-            # Enable tools if user requested search OR if message needs it
-            needs_search = use_search or self._might_need_search(message)
-            
-            # Build tools list
-            tools = None
-            if needs_search:
-                tools = [
-                    {"type": "platform", "id": "web_search"},
-                    {"type": "platform", "id": "parallel_search"},
-                ]
+            # ALWAYS enable web search tools for real business discovery
+            tools = [
+                {"type": "platform", "id": "web_search"},
+                {"type": "platform", "id": "parallel_search"},
+            ]
             
             result = call_subconscious_api(
                 instructions=prompt,
@@ -70,19 +61,19 @@ class ConversationManager:
         return response
     
     def _build_prompt(self, business, user_message: str, customer_context: str, history: str) -> str:
-        """Build the full prompt for the AI."""
+        """Build the prompt with discovery-focused instructions."""
         prompt_parts = [
-            f"You are {business.name}, a professional voice agent.",
+            f"You are {business.name}, a smart discovery assistant.",
             "",
             "YOUR ROLE:",
             business.system_prompt,
             "",
-            "IMPORTANT GUIDELINES:",
-            "- Be conversational and natural, like a real phone call",
-            "- If you don't have information, politely ask for it - don't make things up",
-            "- If customer provides info, acknowledge it and use it",
-            "- Keep responses concise (2-3 sentences) - this is a phone call",
-            "- If you have customer details from records, use them naturally",
+            "KEY BEHAVIORS:",
+            "- USE WEB SEARCH to find REAL businesses when asked about {category}".format(category=business.category),
+            "- Present real options with names, ratings, prices when available",
+            "- Help the user choose and 'book' with their selection",
+            "- Remember everything they tell you",
+            "- Be conversational - this is a phone call",
             "",
         ]
         
@@ -94,7 +85,7 @@ class ConversationManager:
             ])
         else:
             prompt_parts.extend([
-                "CUSTOMER INFORMATION: None on file yet.",
+                "CUSTOMER INFORMATION: New customer - get their name and location first.",
                 "",
             ])
         
@@ -109,26 +100,13 @@ class ConversationManager:
             "CUSTOMER SAYS:",
             user_message,
             "",
-            "YOUR RESPONSE (be helpful, natural, and concise):",
+            "YOUR RESPONSE (search if needed, be helpful and natural):",
         ])
         
         return "\n".join(prompt_parts)
     
-    def _might_need_search(self, message: str) -> bool:
-        """Determine if message might need web search."""
-        search_indicators = [
-            "hours", "open", "closed", "location", "address", "directions",
-            "price", "cost", "how much", "available", "availability",
-            "website", "phone number", "contact", "email",
-            "reviews", "ratings", "nearby", "close to",
-            "what is", "tell me about", "do you have",
-            "latest", "current", "today", "now"
-        ]
-        msg_lower = message.lower()
-        return any(indicator in msg_lower for indicator in search_indicators)
-    
     def get_greeting(self, session_id: str, business_id: str) -> str:
-        """Get the greeting for a business."""
+        """Get the greeting for an agent."""
         business = BUSINESSES.get(business_id)
         if not business:
             return "Hello! How can I help you today?"
@@ -137,7 +115,7 @@ class ConversationManager:
         details = session.get("customer_details", {})
         
         if details.get("name"):
-            return f"Welcome back, {details['name']}! This is {business.name}, how can I help you today?"
+            return f"Welcome back, {details['name']}! I'm {business.name}. How can I help you today?"
         
         return business.greeting
     

@@ -308,10 +308,6 @@ function speak(text, callback) {
 async function sendMessage(message) {
     if (!message.trim()) return;
     
-    // Check if web search is enabled
-    const searchToggle = document.getElementById('searchToggle');
-    const useSearch = searchToggle?.checked || false;
-    
     try {
         const response = await fetch('/api/chat', {
             method: 'POST',
@@ -320,16 +316,16 @@ async function sendMessage(message) {
             },
             body: JSON.stringify({
                 message: message,
-                business_id: state.currentBusiness?.id || 'hotel',
+                business_id: state.currentBusiness?.id || 'restaurant',
                 session_id: state.sessionId,
-                use_search: useSearch,  // Enable web search tools
+                use_search: true,  // Always use web search for real business discovery
             }),
         });
         
         const data = await response.json();
         
         if (data.success) {
-            // Show sources if web search was used
+            // Log sources if web search returned them
             if (data.sources && data.sources.length > 0) {
                 console.log('🔍 Sources:', data.sources);
             }

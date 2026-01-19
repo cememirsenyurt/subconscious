@@ -26,13 +26,14 @@ def index():
 
 @main_bp.route("/api/businesses")
 def get_businesses():
-    """Get list of available businesses."""
+    """Get list of available discovery agents."""
     return jsonify({
         business_id: {
             "id": biz.id,
             "name": biz.name,
             "icon": biz.icon,
             "color": biz.color,
+            "category": biz.category,
             "greeting": biz.greeting,
             "sample_queries": biz.sample_queries
         }
@@ -58,7 +59,7 @@ def reset_conversation():
     """Reset conversation history for a session."""
     data = request.get_json() or {}
     session_id = data.get("session_id", "default")
-    conversation_manager.clear(session_id)
+    conversation_manager.reset_session(session_id)
     return jsonify({"success": True, "message": "Conversation reset"})
 
 

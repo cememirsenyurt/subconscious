@@ -723,37 +723,18 @@ body::before {
     box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* Search Toggle */
-.search-toggle {
+/* Search Badge - Always On Indicator */
+.search-badge {
     display: flex;
-    justify-content: flex-start;
-    padding-left: 8px;
+    justify-content: center;
+    padding: 4px 0;
 }
 
-.toggle-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    color: var(--text-secondary);
-    transition: color var(--transition-fast);
-}
-
-.toggle-label:hover {
-    color: var(--text-primary);
-}
-
-.toggle-label input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent-primary);
-    cursor: pointer;
-}
-
-.toggle-label input[type="checkbox"]:checked + .toggle-text {
-    color: var(--accent-primary);
-    font-weight: 500;
+.badge-text {
+    font-size: 12px;
+    color: var(--accent-success);
+    font-family: var(--font-mono);
+    opacity: 0.8;
 }
 
 .send-button {
