@@ -174,17 +174,22 @@ def extract_details_from_message(message: str) -> Dict:
     details = {}
     msg_lower = message.lower()
     
-    # Extract name (high confidence patterns only)
+    # Extract name (multiple patterns, more flexible)
     name_patterns = [
-        r"(?:my name is|i'm|i am|this is|call me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:my name is|i'm|im|i am|this is|it's|its|call me|hey,?\s*(?:this is)?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
+        r"^(?:hi|hello|hey),?\s*(?:this is|i'm|im|i am)?\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)",
     ]
+    stop_words = ['the', 'a', 'an', 'here', 'there', 'calling', 'looking', 'interested', 
+                  'wondering', 'trying', 'need', 'want', 'have', 'would', 'could', 'can',
+                  'hi', 'hello', 'hey', 'thanks', 'thank', 'please', 'just', 'actually']
     for pattern in name_patterns:
         match = re.search(pattern, message, re.IGNORECASE)
         if match:
             name = match.group(1).strip()
-            # Filter out common false positives
-            if name.lower() not in ['the', 'a', 'an', 'here', 'there', 'calling']:
-                details["name"] = name
+            # Filter out common false positives and title case the name
+            if name.lower() not in stop_words and len(name) > 1:
+                details["name"] = name.title()
+                print(f"[Memory] Extracted name: {details['name']}")
                 break
     
     # Extract phone

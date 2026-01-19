@@ -4,12 +4,13 @@ Chat routes for the Voice Agent application.
 Handles:
 - Main chat endpoint
 - Streaming chat endpoint
+- Reset and greeting endpoints
 """
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from models import BUSINESSES
-from services import conversation_manager, call_subconscious_api, stream_subconscious_response
+from services import conversation_manager, stream_subconscious_response
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -38,50 +39,23 @@ def chat():
     if not message:
         return jsonify({"error": "No message provided"}), 400
     
-    # Get or create conversation with system prompt
-    conversation_manager.get_or_create(session_id, business_id)
+    if business_id not in BUSINESSES:
+        return jsonify({"error": f"Unknown business: {business_id}"}), 400
     
-    # FIRST: Extract info from the message and lookup in database
-    # This populates customer_info with any remembered data
-    conversation_manager._extract_customer_info(session_id, message)
-    conversation_manager._lookup_customer_in_db(session_id)
+    # Process message through conversation manager
+    # This handles: extraction, memory lookup, context building, API call
+    response = conversation_manager.process_message(session_id, business_id, message)
     
-    # NOW build context (which will include the looked-up memory)
-    instructions = conversation_manager.build_full_context(session_id, message)
+    # Clean up any role prefixes that might have leaked through
+    for prefix in ["You:", "Assistant:", "Agent:", f"{BUSINESSES[business_id].name}:"]:
+        if response.startswith(prefix):
+            response = response[len(prefix):].strip()
     
-    # Add user message to history for future context (extraction already done)
-    if session_id in conversation_manager.conversations:
-        conversation_manager.conversations[session_id]["messages"].append({
-            "role": "user",
-            "content": message
-        })
-        # Save to database
-        conversation_manager._save_customer_to_db(session_id)
-    
-    # Call Subconscious API
-    result = call_subconscious_api(instructions)
-    
-    if result["success"]:
-        answer = result["answer"]
-        # Clean up any role prefixes that might have leaked through
-        for prefix in ["You:", "Assistant:", "Agent:", f"{BUSINESSES[business_id].name}:"]:
-            if answer.startswith(prefix):
-                answer = answer[len(prefix):].strip()
-        
-        # Add assistant response to history
-        conversation_manager.add_message(session_id, "assistant", answer)
-        
-        return jsonify({
-            "success": True,
-            "response": answer,
-            "business": BUSINESSES[business_id].name
-        })
-    else:
-        return jsonify({
-            "success": False,
-            "response": result["answer"],
-            "error": result.get("error", "Unknown error")
-        })
+    return jsonify({
+        "success": True,
+        "response": response,
+        "business": BUSINESSES[business_id].name
+    })
 
 
 @chat_bp.route("/api/chat/stream", methods=["POST"])
@@ -98,12 +72,56 @@ def chat_stream():
     if not message:
         return jsonify({"error": "No message provided"}), 400
     
-    conversation_manager.get_or_create(session_id, business_id)
-    conversation_manager.add_message(session_id, "user", message)
+    # Create session and build context
+    conversation_manager.create_session(session_id, business_id)
     
-    instructions = conversation_manager.build_full_context(session_id, message)
+    # For streaming, we need to build the prompt manually
+    from services.memory import smart_memory
+    session = smart_memory.get_session(session_id, business_id)
+    customer_context = smart_memory.get_context_for_ai(session_id)
+    
+    business = BUSINESSES[business_id]
+    instructions = f"""You are {business.name}, a professional voice agent.
+
+{business.system_prompt}
+
+{f"CUSTOMER INFORMATION: {customer_context}" if customer_context else ""}
+
+Customer says: {message}
+
+Respond naturally and concisely:"""
     
     return Response(
         stream_with_context(stream_subconscious_response(instructions)),
         mimetype="text/event-stream"
     )
+
+
+@chat_bp.route("/api/reset", methods=["POST"])
+def reset():
+    """Reset a conversation session."""
+    data = request.get_json() or {}
+    session_id = data.get("session_id", "default")
+    
+    conversation_manager.reset_session(session_id)
+    
+    return jsonify({"success": True, "message": "Session reset"})
+
+
+@chat_bp.route("/api/greeting", methods=["POST"])
+def greeting():
+    """Get the greeting message for a business."""
+    data = request.get_json() or {}
+    business_id = data.get("business_id", "hotel")
+    session_id = data.get("session_id", "default")
+    
+    if business_id not in BUSINESSES:
+        return jsonify({"error": f"Unknown business: {business_id}"}), 400
+    
+    greeting_text = conversation_manager.get_greeting(session_id, business_id)
+    
+    return jsonify({
+        "success": True,
+        "greeting": greeting_text,
+        "business": BUSINESSES[business_id].name
+    })
