@@ -1,156 +1,144 @@
-# Subconscious Interview Submission
+# Subconscious Voice Agent - Technical Submission
 
-**Candidate**: Cem Emir Senyurt  
-**Position**: Founding Engineer - New Grad  
-**Date**: January 2026
-
----
-
-## 📦 What I Built
-
-**A Voice Agent Platform for Businesses** - Users can "call" various businesses (hotel, restaurant, clinic, etc.) and have natural voice conversations. The agent remembers context within a call AND across sessions.
-
-**Repository**: https://github.com/cememirsenyurt/subconscious
-
-**Live Demo**: Run locally with `python app.py` → http://localhost:5001
+**Author:** Cem Emir Senyurt  
+**Email:** cememirsenyurt99@gmail.com  
+**Repository:** https://github.com/cememirsenyurt/subconscious  
 
 ---
 
-## 🔑 Key Features Demonstrating Subconscious Capabilities
+## Overview
 
-### 1. Long-Context Reasoning
-- Full conversation history sent to `tim-large`
-- 6 different business personas with 50+ line system prompts
-- Agent maintains character throughout extended conversations
+This project demonstrates a voice-enabled AI agent platform built on the Subconscious API. The system allows users to interact with specialized discovery agents through voice or text, finding real businesses and completing mock bookings. Each agent leverages Subconscious's web search capabilities to return actual business data including names, prices, reviews, and availability.
 
-### 2. Cross-Session Memory (Long-Term)
-- Customer makes reservation → stored in database
-- Customer "hangs up", calls back later
-- Says their name → agent instantly retrieves their reservation
-- **This is what Subconscious is known for**
-
-### 3. Production-Ready Architecture
-```
-app.py (65 lines) → routes/ → services/ → models/
-```
-- Flask Blueprints for modularity
-- Official Subconscious SDK integration
-- Graceful fallback to HTTP if SDK unavailable
+The core insight driving this project: Subconscious excels at long-horizon reasoning and tool use. Rather than building a simple chatbot, I created agents that actively search the web, extract structured information, and maintain persistent memory across sessions.
 
 ---
 
-## 🎯 My Experience Summary
+## Architecture
 
-### What Worked Great
-| Aspect | Rating | Notes |
-|--------|--------|-------|
-| API Design | ⭐⭐⭐⭐⭐ | Clean, predictable REST endpoints |
-| tim-large Quality | ⭐⭐⭐⭐⭐ | Excellent persona maintenance |
-| Dashboard UX | ⭐⭐⭐⭐ | Easy key management, clear usage |
-| Quickstart Docs | ⭐⭐⭐⭐ | Got running in 5 minutes |
+### Stack
+- **Backend:** Python/Flask
+- **AI Engine:** Subconscious API (tim-large)
+- **Voice:** Browser MediaRecorder + Server-side Speech Recognition + Web Speech Synthesis
+- **Frontend:** Vanilla HTML/CSS/JavaScript
 
-### Friction I Encountered
-| Issue | Severity | My Solution |
-|-------|----------|-------------|
-| 202 async response not obvious | Medium | Built polling loop |
-| No built-in conversation memory | High | Built `CustomerDatabase` class |
-| Tool payload format unclear | Low | Trial and error |
+### Key Components
 
----
+**1. Smart Memory System**
 
-## 💡 Top 5 Improvement Suggestions
+The platform uses a two-layer approach for information extraction:
+- Primary extraction via Subconscious AI (not regex patterns)
+- Persistent customer database that survives session restarts
 
-### 1. **Built-in Conversation Memory**
-```python
-# Current: I manually build context each time
-# Suggested:
-client.run(memory={"session_id": "user-123", "persist": True})
-```
+When a user says "My name is Kevin and I'm looking for a 3 bedroom house in San Mateo with a budget around 800k," the system extracts: name, property type, bedrooms, location, and budget - all through AI understanding, not hardcoded patterns.
 
-### 2. **Entity Extraction Tool**
-```python
-# Current: I regex-parse names, dates, times
-# Suggested: Built-in NER tool
-tools=[{"type": "platform", "id": "entity_extraction"}]
-```
+**2. Intelligent Search Detection**
 
-### 3. **Async/Await SDK Support**
-```python
-# Current: Blocking await_completion or manual polling
-# Suggested:
-run = await client.run_async(...)
-```
+Not every message needs web search. The system analyzes each message to determine if it requires real-time data:
+- "Hi my name is Kelly" → No search, instant response
+- "Find gyms in San Francisco with prices" → Web search, returns real gyms
 
-### 4. **Webhook Examples in Docs**
-Currently: Webhooks mentioned but no examples
-Suggested: Full tutorial with Express/Flask setup
+This prevents unnecessary API calls and keeps conversational exchanges fast.
 
-### 5. **Conversation API**
-```
-POST /conversations/{id}/messages  # Stateful!
-GET /conversations/{id}/history
-```
+**3. Discovery Agents**
+
+Six specialized agents, each configured to find real businesses:
+- Restaurant Finder - Search restaurants, make reservations
+- Fitness Finder - Compare gyms and membership prices
+- Hotel Finder - Find hotels, book rooms
+- Property Finder - Search real estate listings
+- Healthcare Finder - Locate doctors and clinics
+- Salon Finder - Find salons and spas
+
+Each agent uses the same underlying architecture but with domain-specific prompts and extraction logic.
 
 ---
 
-## 📊 Technical Details
+## Subconscious Features Used
 
-| Component | Technology |
-|-----------|------------|
-| Backend | Python 3.11, Flask 2.3 |
-| AI | Subconscious SDK, tim-large |
-| Speech | Web Speech API + Google STT |
-| Audio | pydub + ffmpeg |
-| Frontend | Vanilla JS, CSS Variables |
+**Platform Tools**
+- `web_search` - Real-time Google search for current business data
+- `parallel_search` - Authoritative source verification
 
-**Lines of Code**:
-- Python: ~800 lines across 12 files
-- JavaScript: ~400 lines
-- CSS: ~300 lines
+**SDK Integration**
+- Async run creation with polling
+- Streaming endpoint support (SSE)
+- Tool configuration and management
+
+**Custom Function Tools (Prepared)**
+- `/api/tools/lookup_customer` - Agent can query our database
+- `/api/tools/save_booking` - Agent can create reservations
+- `/api/tools/check_availability` - Real-time availability checks
 
 ---
 
-## 🏃 How to Run
+## Sample Interaction
+
+**User:** "Find Italian restaurants in San Mateo"
+
+**Agent Response:**
+> I found these Italian restaurants in San Mateo:
+> 1. Pausa Bar & Cookery - Contemporary Italian, Michelin recognized, upscale
+> 2. Sapore Express - Fresh handmade pasta, casual, family-friendly
+> 3. La Lanterna - Traditional Italian, family-run, medium-priced
+> 4. Vespucci Ristorante Italiano - Classic menu, great for dinner
+>
+> Would you like to make a reservation at any of these?
+
+**User:** "Book Pausa Bar for 4 people Saturday at 7pm. My name is Kevin, phone 555-1234"
+
+**System extracts and stores:**
+```
+restaurant: Pausa Bar & Cookery
+party_size: 4
+date: Saturday
+time: 7pm
+name: Kevin
+phone: 555-1234
+```
+
+On the next call, when Kevin identifies himself, the system retrieves his reservation details.
+
+---
+
+## Running the Project
 
 ```bash
-git clone https://github.com/[YOUR_USERNAME]/subconscious.git
+git clone https://github.com/cememirsenyurt/subconscious.git
 cd subconscious
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-echo "SUBCONSCIOUS_API_KEY=your-key" > .env
+
+# Create .env file with your API key
+echo "SUBCONSCIOUS_API_KEY=your_key_here" > .env
+
 python app.py
 # Open http://localhost:5001
 ```
 
 ---
 
-## 🎬 Demo Scenario
+## Suggested Improvements for Subconscious Platform
 
-**Call 1** (Session A):
-```
-User: "Hi, my name is Jason Statham. I want to make a reservation for tonight."
-Agent: "Buonasera, Mr. Statham! I'd be happy to help. What time works for you?"
-User: "7pm, terrace, party of two"
-Agent: "Perfect! I have you down for tonight at 7pm on our outdoor terrace for 2 guests."
-```
+Based on my development experience:
 
-**Call 2** (Session B - NEW session!):
-```
-User: "Hi, my name is Jason. What's my reservation info?"
-Agent: "Yes, I have your reservation right here! Tonight at 7:00 p.m. on our outdoor terrace for 2 guests. We can't wait to welcome you!"
-```
+1. **Structured Output Mode** - Option to return JSON alongside natural language would simplify extraction pipelines
 
-**The agent remembered Jason across sessions.** That's the Subconscious difference.
+2. **Webhook Support for Long Runs** - Web searches can take 15-30 seconds; webhooks would be cleaner than polling
+
+3. **Tool Result Visibility** - Exposing which tools were called and their raw results would help with debugging
+
+4. **Streaming + Tools** - Currently streaming doesn't work well with tool calls; combining them would improve UX
+
+5. **Rate Limit Headers** - Including rate limit info in response headers would help with throttling
+
+6. **Cached Search Results** - Option to cache recent search results would reduce latency for common queries
 
 ---
 
-## 📞 Contact
+## Conclusion
 
-Ready to discuss the project, dive into the code, or talk about the role!
+This project demonstrates that Subconscious is well-suited for building agents that need to take real-world actions - not just chat. The combination of web search tools, long-horizon reasoning, and the clean SDK made it possible to build a functional business discovery platform in a short timeframe.
 
-- Email: cememirsenyurt99@gmail.com
-- GitHub: github.com/cememirsenyurt
-
----
-
-*Thank you for the opportunity to build with Subconscious!*
+The voice interface adds accessibility, but the core value is in the agent architecture: smart search detection, AI-powered extraction, and persistent memory. These patterns could extend to any domain where users need to discover, compare, and transact with real businesses.
