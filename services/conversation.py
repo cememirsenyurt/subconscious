@@ -1,19 +1,21 @@
 """
-Conversation Service - Manages AI conversations with smart memory.
+Conversation Service - Manages AI conversations with PARALLEL processing.
 
-Uses Subconscious AI for both:
-1. Generating responses (with tools for web search when needed)
-2. Extracting customer details from messages
+Two Subconscious AI calls run concurrently:
+1. Response Generation - The main agent response
+2. Information Extraction - Extracts customer details
+
+This ensures we capture ALL info while keeping response time fast.
 """
 
-from typing import Dict, Optional
+from typing import Dict
 from models.business import BUSINESSES
-from .memory import smart_memory, extract_details_from_message
-from .subconscious_api import call_subconscious_api, extract_details_with_ai
+from .memory import smart_memory, process_message_parallel
+from .subconscious_api import call_subconscious_api
 
 
 class ConversationManager:
-    """Manages conversations with AI-powered memory."""
+    """Manages conversations with parallel AI processing."""
     
     def __init__(self):
         pass
@@ -25,57 +27,38 @@ class ConversationManager:
     
     def process_message(self, session_id: str, business_id: str, user_message: str) -> str:
         """
-        Process a user message and return the agent's response.
-        """
-        session = smart_memory.get_session(session_id, business_id)
+        Process a user message with PARALLEL AI calls:
+        - Response AI: Generates the agent's answer
+        - Extraction AI: Extracts customer information
         
+        Both run concurrently to save time!
+        """
         business = BUSINESSES.get(business_id)
         if not business:
             return "Sorry, this business is not available."
         
-        # Extract details from user message
-        local_details = extract_details_from_message(user_message)
-        if local_details:
-            print(f"[Conversation] Local extraction: {local_details}")
-            smart_memory.update_customer_details(session_id, local_details)
+        # Define the response generator function
+        def generate_response(message: str, customer_context: str, history: str) -> str:
+            prompt = self._build_prompt(business, message, customer_context, history)
+            
+            # Enable tools for questions that might need real info
+            needs_search = self._might_need_search(message)
+            
+            result = call_subconscious_api(
+                instructions=prompt,
+                enable_tools=needs_search
+            )
+            
+            return result.get("answer", "I'm sorry, could you repeat that?")
         
-        # Look up existing customer if we found a name
-        if "name" in local_details:
-            smart_memory.lookup_customer(session_id, local_details["name"])
-        
-        smart_memory.add_message(session_id, "user", user_message)
-        
-        # Build context
-        customer_context = smart_memory.get_context_for_ai(session_id)
-        messages = session.get("messages", [])[-6:]
-        history = "\n".join([
-            f"{'Customer' if m['role'] == 'user' else 'Agent'}: {m['content']}"
-            for m in messages[:-1]
-        ])
-        
-        prompt = self._build_prompt(business, user_message, customer_context, history)
-        
-        # Enable tools for questions that might need real info
-        needs_search = self._might_need_search(user_message)
-        
-        result = call_subconscious_api(
-            instructions=prompt,
-            enable_tools=needs_search
+        # Process with parallel extraction
+        response = process_message_parallel(
+            session_id=session_id,
+            business_id=business_id,
+            message=user_message,
+            response_generator=generate_response,
+            smart_memory=smart_memory
         )
-        
-        response = result.get("answer", "I'm sorry, could you repeat that?")
-        smart_memory.add_message(session_id, "assistant", response)
-        
-        # Extract details from AI response too
-        ai_details = extract_details_from_message(response)
-        if ai_details:
-            ai_details.pop("name", None)
-            if ai_details:
-                smart_memory.update_customer_details(session_id, ai_details)
-        
-        # Use AI extraction for complex messages
-        if len(user_message.split()) > 5:
-            self._async_ai_extraction(session_id, user_message, customer_context)
         
         return response
     
@@ -89,11 +72,10 @@ class ConversationManager:
             "",
             "IMPORTANT GUIDELINES:",
             "- Be conversational and natural, like a real phone call",
-            "- If you don't have information the customer asks about, politely ask for it",
-            "- NEVER make up information - if you don't know, ask or offer to look it up",
-            "- If customer asks for something searchable (hours, locations, prices), use your search capability",
-            "- Keep responses concise - this is a phone call, not an essay",
-            "- If you have customer details, use them naturally",
+            "- If you don't have information, politely ask for it - don't make things up",
+            "- If customer provides info, acknowledge it and use it",
+            "- Keep responses concise (2-3 sentences) - this is a phone call",
+            "- If you have customer details from records, use them naturally",
             "",
         ]
         
@@ -138,16 +120,6 @@ class ConversationManager:
         msg_lower = message.lower()
         return any(indicator in msg_lower for indicator in search_indicators)
     
-    def _async_ai_extraction(self, session_id: str, message: str, context: str):
-        """Use AI to extract complex details from a message."""
-        try:
-            extracted = extract_details_with_ai(message, context)
-            if extracted:
-                print(f"[Conversation] AI extraction: {extracted}")
-                smart_memory.update_customer_details(session_id, extracted)
-        except Exception as e:
-            print(f"[Conversation] AI extraction failed: {e}")
-    
     def get_greeting(self, session_id: str, business_id: str) -> str:
         """Get the greeting for a business."""
         business = BUSINESSES.get(business_id)
@@ -158,7 +130,7 @@ class ConversationManager:
         details = session.get("customer_details", {})
         
         if details.get("name"):
-            return f"Welcome back! This is {business.name}, how can I help you today?"
+            return f"Welcome back, {details['name']}! This is {business.name}, how can I help you today?"
         
         return business.greeting
     

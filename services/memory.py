@@ -1,32 +1,34 @@
 """
 Smart Memory Service - AI-Powered Information Extraction
 
-Instead of hardcoding patterns, we let Subconscious AI extract important details.
-This captures ANY information the customer provides, not just predefined fields.
+Uses a SECOND Subconscious AI call to intelligently extract customer information.
+No hardcoding - the AI understands context and extracts what matters.
 """
 
 import json
 import re
+import threading
 from typing import Dict, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .customer_db import customer_db
 
 
 class SmartMemory:
     """
     AI-powered memory that extracts and stores ANY relevant customer information.
-    No hardcoded fields - just stores what the AI identifies as important.
+    Uses Subconscious AI for intelligent extraction - no hardcoded patterns.
     """
     
     def __init__(self):
         self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.executor = ThreadPoolExecutor(max_workers=4)
     
     def get_session(self, session_id: str, business_id: str) -> Dict:
         """Get or create a session."""
         if session_id not in self.sessions:
             self.sessions[session_id] = {
                 "business_id": business_id,
-                "customer_details": {},  # Flexible dictionary - stores ANYTHING
-                "conversation_summary": "",
+                "customer_details": {},
                 "messages": []
             }
         return self.sessions[session_id]
@@ -38,28 +40,21 @@ class SmartMemory:
                 "role": role,
                 "content": content
             })
-            # Keep last 20 messages for context
             self.sessions[session_id]["messages"] = self.sessions[session_id]["messages"][-20:]
     
     def update_customer_details(self, session_id: str, details: Dict):
-        """
-        Update customer details with new information.
-        Merges new details with existing ones.
-        """
+        """Update customer details with new information."""
         if session_id not in self.sessions:
             return
         
         current = self.sessions[session_id]["customer_details"]
         
-        # Merge new details (new values override old ones if not empty)
         for key, value in details.items():
-            if value and str(value).strip():
-                # Normalize key to lowercase with underscores
+            if value and str(value).strip() and str(value).lower() not in ['none', 'null', 'n/a', 'unknown']:
                 normalized_key = key.lower().replace(" ", "_").replace("-", "_")
                 current[normalized_key] = value
                 print(f"[SmartMemory] Stored: {normalized_key} = {value}")
         
-        # Save to persistent database if we have a name
         self._save_to_db(session_id)
     
     def get_customer_details(self, session_id: str) -> Dict:
@@ -70,21 +65,22 @@ class SmartMemory:
     
     def lookup_customer(self, session_id: str, name: str):
         """Look up customer in database and restore their info."""
-        if session_id not in self.sessions:
-            return
+        if session_id not in self.sessions or not name:
+            return False
         
         business_id = self.sessions[session_id]["business_id"]
         stored = customer_db.find_customer(name, business_id)
         
         if stored:
             print(f"[SmartMemory] Found returning customer: {name}")
-            # Merge stored data into current session
             current = self.sessions[session_id]["customer_details"]
             for key, value in stored.items():
                 if value and key not in current:
                     current[key] = value
                     print(f"[SmartMemory] Restored: {key} = {value}")
             current["is_returning_customer"] = True
+            return True
+        return False
     
     def _save_to_db(self, session_id: str):
         """Save customer details to persistent database."""
@@ -95,16 +91,14 @@ class SmartMemory:
         details = session["customer_details"]
         business_id = session["business_id"]
         
-        # Need a name to save
-        name = details.get("name") or details.get("customer_name")
+        name = details.get("name") or details.get("customer_name") or details.get("full_name")
         if not name:
             return
         
-        # Save all details (excluding internal flags)
         save_data = {k: v for k, v in details.items() 
                     if not k.startswith("_") and k != "is_returning_customer"}
         
-        if len(save_data) > 1:  # More than just the name
+        if len(save_data) > 1:
             customer_db.save_customer(name, business_id, save_data)
     
     def get_context_for_ai(self, session_id: str) -> str:
@@ -125,11 +119,9 @@ class SmartMemory:
         else:
             parts.append("[CUSTOMER INFORMATION]")
         
-        # List all stored details
         for key, value in details.items():
             if key.startswith("_") or key == "is_returning_customer":
                 continue
-            # Make key human readable
             display_key = key.replace("_", " ").title()
             parts.append(f"• {display_key}: {value}")
         
@@ -144,111 +136,125 @@ class SmartMemory:
             del self.sessions[session_id]
 
 
-# Build the extraction prompt for Subconscious
-EXTRACTION_PROMPT = """Analyze this customer message and extract ALL important details.
+# =============================================================================
+# AI-POWERED EXTRACTION (using Subconscious as second layer)
+# =============================================================================
 
-Return a JSON object with any relevant information found. Use descriptive keys.
-Examples of what to extract:
-- name, phone, email
-- dates, times, duration
-- budget, price range, cost preferences  
-- location, address, area, neighborhood, city
-- quantities (party size, number of people, rooms, etc.)
-- preferences (seating, style, type, features)
-- product/service details (membership type, room type, property specs, etc.)
-- any specific requirements or requests
-
-ONLY include fields that were explicitly mentioned. Do not invent or assume.
-Return empty {} if no extractable information found.
-
-Customer message: "{message}"
-
-Return ONLY valid JSON, nothing else:"""
-
-
-def extract_details_from_message(message: str) -> Dict:
+def extract_with_ai(message: str, context: str = "") -> Dict:
     """
-    Basic extraction for common patterns.
-    This is a fallback - the main extraction happens via Subconscious AI.
+    Use Subconscious AI to intelligently extract customer information.
+    This runs as a SECOND parallel call - no hardcoding!
     """
-    details = {}
-    msg_lower = message.lower()
+    from .subconscious_api import call_subconscious_api
     
-    # Extract name (multiple patterns, more flexible)
-    name_patterns = [
-        r"(?:my name is|i'm|im|i am|this is|it's|its|call me|hey,?\s*(?:this is)?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
-        r"^(?:hi|hello|hey),?\s*(?:this is|i'm|im|i am)?\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)",
-    ]
-    stop_words = ['the', 'a', 'an', 'here', 'there', 'calling', 'looking', 'interested', 
-                  'wondering', 'trying', 'need', 'want', 'have', 'would', 'could', 'can',
-                  'hi', 'hello', 'hey', 'thanks', 'thank', 'please', 'just', 'actually']
-    for pattern in name_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            name = match.group(1).strip()
-            # Filter out common false positives and title case the name
-            if name.lower() not in stop_words and len(name) > 1:
-                details["name"] = name.title()
-                print(f"[Memory] Extracted name: {details['name']}")
-                break
+    prompt = f"""You are an information extraction assistant. Extract ALL customer details from this message.
+
+IMPORTANT RULES:
+1. Extract the customer's FULL NAME correctly. "My name is Cem and last name is Senyurt" means name is "Cem Senyurt"
+2. Extract dates, times, budgets, preferences, locations - ANYTHING relevant
+3. If info was previously known and customer confirms it, include it
+4. Return ONLY a valid JSON object with extracted fields
+5. Use clear field names: name, phone, email, date, time, budget, location, etc.
+6. If nothing to extract, return empty {{}}
+
+CONVERSATION CONTEXT:
+{context if context else "No previous context"}
+
+CURRENT MESSAGE TO EXTRACT FROM:
+"{message}"
+
+Return ONLY valid JSON (no markdown, no explanation):"""
     
-    # Extract phone
-    phone_match = re.search(r'(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})', message)
-    if phone_match:
-        details["phone"] = phone_match.group(1)
+    try:
+        result = call_subconscious_api(
+            instructions=prompt,
+            enable_tools=False  # Pure extraction, no tools needed
+        )
+        
+        if result["success"]:
+            answer = result["answer"].strip()
+            
+            # Clean up markdown if present
+            if "```json" in answer:
+                answer = answer.split("```json")[1].split("```")[0]
+            elif "```" in answer:
+                answer = answer.split("```")[1].split("```")[0]
+            
+            # Parse JSON
+            extracted = json.loads(answer.strip())
+            if isinstance(extracted, dict):
+                print(f"[AI Extraction] Extracted: {extracted}")
+                return extracted
+    except json.JSONDecodeError as e:
+        print(f"[AI Extraction] JSON parse error: {e}")
+    except Exception as e:
+        print(f"[AI Extraction] Error: {e}")
     
-    # Extract email
-    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', message)
-    if email_match:
-        details["email"] = email_match.group(0)
+    return {}
+
+
+def process_message_parallel(
+    session_id: str,
+    business_id: str, 
+    message: str,
+    response_generator,  # Function that generates the response
+    smart_memory: SmartMemory
+) -> str:
+    """
+    Process message with smart sequencing:
+    1. FIRST: Quick extraction to get customer name
+    2. THEN: Lookup returning customer if name found
+    3. FINALLY: Generate response with full context
     
-    # Extract money/budget amounts
-    money_patterns = [
-        (r'\$\s*([\d,]+(?:\.\d{2})?)\s*(?:million|m)', lambda m: f"${float(m.replace(',',''))*1000000:,.0f}"),
-        (r'\$\s*([\d,]+(?:\.\d{2})?)\s*(?:k|thousand)', lambda m: f"${float(m.replace(',',''))*1000:,.0f}"),
-        (r'\$\s*([\d,]+(?:\.\d{2})?)', lambda m: f"${m}"),
-        (r'(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:dollars?)?', lambda m: f"${float(m)*1000000:,.0f}"),
-        (r'(\d+)\s*(?:k|thousand)\s*(?:dollars?)?', lambda m: f"${float(m)*1000:,.0f}"),
-    ]
-    for pattern, formatter in money_patterns:
-        match = re.search(pattern, msg_lower)
-        if match:
-            try:
-                details["budget"] = formatter(match.group(1))
-                break
-            except:
-                pass
+    This ensures the agent knows who they're talking to!
+    """
+    session = smart_memory.get_session(session_id, business_id)
     
-    # Extract dates
-    date_match = re.search(
-        r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?',
-        msg_lower
-    )
-    if date_match:
-        month = date_match.group(1).title()
-        day = date_match.group(2)
-        year = date_match.group(3) or "2026"
-        details["date"] = f"{month} {day}, {year}"
+    # Get conversation history
+    messages = session.get("messages", [])[-6:]
+    history = "\n".join([
+        f"{'Customer' if m['role'] == 'user' else 'Agent'}: {m['content']}"
+        for m in messages
+    ])
     
-    # Extract time
-    time_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))', message)
-    if time_match:
-        details["time"] = time_match.group(1)
+    # STEP 1: Run extraction FIRST to identify customer
+    print("[Parallel] Step 1: Running extraction...")
+    try:
+        current_context = smart_memory.get_context_for_ai(session_id)
+        full_context = f"{current_context}\n\nRecent conversation:\n{history}" if history else current_context
+        
+        extracted = extract_with_ai(message, full_context)
+        if extracted:
+            # Check if we got a name - try to look up returning customer
+            name = extracted.get("name") or extracted.get("full_name") or extracted.get("customer_name")
+            if name:
+                print(f"[Parallel] Found name: {name}")
+                # Lookup BEFORE updating (so we get existing data)
+                if not session["customer_details"].get("is_returning_customer"):
+                    smart_memory.lookup_customer(session_id, name)
+            
+            # Update with extracted info
+            smart_memory.update_customer_details(session_id, extracted)
+    except Exception as e:
+        print(f"[Parallel] Extraction error: {e}")
     
-    # Extract numbers with context (party size, bedrooms, etc.)
-    number_contexts = [
-        (r'(\d+)\s*(?:people|persons|guests|of us)', 'party_size'),
-        (r'party of\s*(\d+)', 'party_size'),
-        (r'(\d+)\s*(?:bed(?:room)?s?)', 'bedrooms'),
-        (r'(\d+)\s*(?:bath(?:room)?s?)', 'bathrooms'),
-        (r'for\s*(\d+)\s*(?:night|day)s?', 'duration'),
-    ]
-    for pattern, key in number_contexts:
-        match = re.search(pattern, msg_lower)
-        if match:
-            details[key] = match.group(1)
+    # STEP 2: Build context WITH the extracted/looked-up info
+    print("[Parallel] Step 2: Building context with customer info...")
+    updated_context = smart_memory.get_context_for_ai(session_id)
     
-    return details
+    # STEP 3: Generate response with full context
+    print("[Parallel] Step 3: Generating response...")
+    try:
+        response = response_generator(message, updated_context, history)
+    except Exception as e:
+        print(f"[Parallel] Response error: {e}")
+        response = "I'm sorry, I'm having trouble processing that. Could you try again?"
+    
+    # Add messages to history
+    smart_memory.add_message(session_id, "user", message)
+    smart_memory.add_message(session_id, "assistant", response)
+    
+    return response
 
 
 # Global instance
