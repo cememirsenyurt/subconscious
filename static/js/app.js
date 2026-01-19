@@ -434,6 +434,17 @@ function showTypingIndicator() {
     elements.conversation.appendChild(messageDiv);
     elements.conversation.scrollTop = elements.conversation.scrollHeight;
     
+    // Update indicator text after 2 seconds to show progress
+    setTimeout(() => {
+        const indicator = document.getElementById(id);
+        if (indicator) {
+            const bubble = indicator.querySelector('.message-bubble');
+            if (bubble) {
+                bubble.innerHTML = 'One moment please...<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+            }
+        }
+    }, 2000);
+    
     return id;
 }
 

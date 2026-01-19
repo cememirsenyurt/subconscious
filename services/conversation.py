@@ -168,34 +168,41 @@ class ConversationManager:
                 print(f"[Memory] Remembered party size: {info['party_size']}")
                 break
         
-        # Extract full date mentions (more comprehensive)
-        # Month + day patterns
-        month_day = re.search(
-            r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?',
-            msg_lower
-        )
-        if month_day:
-            month = month_day.group(1).title()
-            day = month_day.group(2)
-            year = month_day.group(3) or "2025"
-            info["reservation_date"] = f"{month} {day}, {year}"
-            print(f"[Memory] Remembered reservation date: {info['reservation_date']}")
-        else:
-            # Try other date patterns
-            date_patterns = [
-                (r'(today|tonight)', "today"),
-                (r'(tomorrow)', "tomorrow"),
-                (r'(this weekend)', "this weekend"),
-                (r'(next week)', "next week"),
-                (r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)', None),
-                (r'(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)', None),
-            ]
-            for pattern, replacement in date_patterns:
-                match = re.search(pattern, msg_lower)
-                if match:
-                    info["reservation_date"] = replacement or match.group(1).title()
-                    print(f"[Memory] Remembered reservation date: {info['reservation_date']}")
-                    break
+        # Only extract dates if there's booking/reservation context
+        booking_context_words = ['book', 'reserv', 'appointment', 'schedule', 'table for', 
+                                  'room for', 'want to', 'like to', 'need to', 'can i', 
+                                  'available', 'opening', 'slot']
+        has_booking_context = any(word in msg_lower for word in booking_context_words)
+        
+        # Extract full date mentions (only if booking context exists)
+        if has_booking_context:
+            # Month + day patterns
+            month_day = re.search(
+                r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?',
+                msg_lower
+            )
+            if month_day:
+                month = month_day.group(1).title()
+                day = month_day.group(2)
+                year = month_day.group(3) or "2025"
+                info["reservation_date"] = f"{month} {day}, {year}"
+                print(f"[Memory] Remembered reservation date: {info['reservation_date']}")
+            else:
+                # Try other date patterns
+                date_patterns = [
+                    (r'(today|tonight)', "today"),
+                    (r'(tomorrow)', "tomorrow"),
+                    (r'(this weekend)', "this weekend"),
+                    (r'(next week)', "next week"),
+                    (r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)', None),
+                    (r'(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)', None),
+                ]
+                for pattern, replacement in date_patterns:
+                    match = re.search(pattern, msg_lower)
+                    if match:
+                        info["reservation_date"] = replacement or match.group(1).title()
+                        print(f"[Memory] Remembered reservation date: {info['reservation_date']}")
+                        break
         
         # Extract time mentions - must have am/pm or be followed by "o'clock"
         time_patterns = [
@@ -417,21 +424,21 @@ class ConversationManager:
         # Instructions for response
         parts.append(f"""
 [RESPONSE INSTRUCTIONS]
-1. Respond naturally as if on a phone call - be conversational and warm
-2. Keep your response concise (2-3 sentences typically)
-3. IMPORTANT: Use the customer's name if you know it - this shows you remember them
-4. Reference any previous information from the conversation when relevant
-5. Do not include role labels like "Agent:" or "You:" - just speak directly
-6. If the customer gave their name earlier, address them by name
+1. LISTEN FIRST: Don't assume you know what the customer wants. Ask clarifying questions if needed.
+2. DON'T ASSUME: Never claim to have information you don't have. If unsure, ASK.
+3. Be conversational and warm - you're on a phone call
+4. Keep responses concise (2-3 sentences)
+5. Use the customer's name if you know it
+6. If the customer mentions a problem or concern, acknowledge it with empathy FIRST, then ask how you can help
+7. Do not include role labels like "Agent:" - just speak directly
 
-[HANDLING RESERVATION LOOKUPS]
-{"You have the customer's reservation details above - use them!" if has_reservation else '''If a customer says they have an existing reservation and provides their name or details:
-1. ROLE-PLAY as if you found their reservation in your system
-2. Confirm back the details they gave you (name, date, time, party size)
-3. If they only gave partial info (like just a name), ask for more details to "locate" their booking
-4. Once you have enough details, confirm: "Yes, I found your reservation! [repeat their details back]"
-5. NEVER say "I don't have access to reservations" - you ARE the reservation system
-6. Be helpful and act as if you successfully looked up their booking'''
+[HANDLING RESERVATIONS]
+{f"You have the customer's reservation details above - use them! Say 'Yes, I have your reservation right here!' and give the specific details." if has_reservation else '''IMPORTANT: The customer does NOT have an existing reservation in our system.
+- Do NOT claim to have their reservation if they never made one
+- Do NOT say "I have your reservation right here" unless they actually booked one
+- If they want to make a NEW appointment/reservation, help them book one
+- If they ask about an appointment they claim to have, politely ask for details to help locate it
+- Be honest - if you don't have their booking info, ask them to provide details or help them make a new one'''
 }""")
 
         return "\n".join(parts)
