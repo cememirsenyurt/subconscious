@@ -1,0 +1,18 @@
+# Subconscious Voice Agent Demo
+# ==============================
+
+# Core Framework
+flask>=2.3.0
+
+# Subconscious SDK (Official)
+subconscious-sdk>=0.1.6
+
+# HTTP Requests (fallback for API)
+requests>=2.31.0
+
+# Speech Recognition
+SpeechRecognition>=3.10.0
+pydub>=0.25.1  # For audio format conversion
+
+# Environment Variables
+python-dotenv>=1.0.0

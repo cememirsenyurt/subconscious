@@ -1,0 +1,441 @@
+"""
+Conversation Management Service.
+
+Manages conversation history, memory extraction, and context building
+for multi-turn voice agent interactions.
+"""
+
+import re
+from typing import Dict
+
+from models import BUSINESSES
+from .customer_db import customer_db
+
+
+class ConversationManager:
+    """
+    Manages conversation history for multi-turn interactions.
+    
+    Features:
+    - Maintains full conversation context
+    - Extracts and remembers key customer facts (name, phone, reservation details)
+    - Integrates with CustomerDatabase for cross-session memory
+    - Builds comprehensive prompts for the AI
+    """
+    
+    def __init__(self):
+        self.conversations: Dict[str, Dict] = {}
+    
+    def get_or_create(self, session_id: str, business_id: str) -> Dict:
+        """
+        Get existing conversation or create new one with system prompt.
+        
+        Args:
+            session_id: Unique identifier for the conversation session
+            business_id: The business type (hotel, restaurant, etc.)
+            
+        Returns:
+            The conversation dictionary
+        """
+        if session_id not in self.conversations:
+            business = BUSINESSES.get(business_id, BUSINESSES["hotel"])
+            self.conversations[session_id] = {
+                "business_id": business_id,
+                "business_name": business.name,
+                "system_prompt": business.system_prompt,
+                "messages": [],  # List of (role, content) tuples
+                "customer_info": {},  # Extracted customer details
+            }
+        return self.conversations[session_id]
+    
+    def add_message(self, session_id: str, role: str, content: str):
+        """
+        Add a message to the conversation history.
+        
+        Args:
+            session_id: The conversation session ID
+            role: Message role ("user" or "assistant")
+            content: The message content
+        """
+        if session_id in self.conversations:
+            self.conversations[session_id]["messages"].append({
+                "role": role,
+                "content": content
+            })
+            
+            # Extract and remember customer information from user messages
+            if role == "user":
+                self._extract_customer_info(session_id, content)
+                
+                # Check if customer gave their name - look up in global database
+                self._lookup_customer_in_db(session_id)
+                
+                # Save customer to database if we have meaningful info
+                self._save_customer_to_db(session_id)
+            
+            # Also extract confirmed details from agent responses
+            if role == "assistant":
+                self._extract_from_confirmation(session_id, content)
+                
+                # Save customer to global database for future sessions
+                self._save_customer_to_db(session_id)
+    
+    def _extract_customer_info(self, session_id: str, message: str):
+        """
+        Extract key customer information from messages for memory.
+        
+        Extracts: names, phone numbers, emails, party sizes, dates, times, seating preferences
+        """
+        conv = self.conversations[session_id]
+        info = conv["customer_info"]
+        msg_lower = message.lower()
+        
+        # Extract name patterns - also check for standalone names (just a name as response)
+        name_patterns = [
+            "my name is ", "i'm ", "i am ", "this is ", "call me ",
+            "name's ", "it's ", "the name is ", "name is "
+        ]
+        
+        # Words that should NOT be part of a name
+        stop_words = {'what', 'whats', "what's", 'when', 'where', 'how', 'why', 'which', 'who', 
+                      'can', 'could', 'would', 'will', 'do', 'does', 'did', 'is', 'are', 'was', 
+                      'were', 'the', 'and', 'or', 'but', 'for', 'to', 'at', 'on', 'in', 'i', 
+                      'my', 'me', 'want', 'need', 'have', 'had', 'reservation', 'appointment', 
+                      'booking', 'book', 'table', 'dinner', 'lunch', 'breakfast', 'please', 
+                      'thanks', 'make', 'call', 'calling', 'check', 'looking', 'like', 'just',
+                      'give', 'tell', 'show', 'info', 'information', 'details', 'about'}
+        
+        # Check if message looks like just a name (1-3 capitalized words)
+        words = message.strip().split()
+        if len(words) <= 3 and all(w[0].isupper() for w in words if w):
+            # Likely just a name response - but filter stop words
+            potential_name = []
+            for w in words:
+                clean = w.strip('.,!?')
+                if clean.lower() not in stop_words:
+                    potential_name.append(clean)
+            if potential_name and len(" ".join(potential_name)) > 1:
+                info["name"] = " ".join(potential_name)
+                print(f"[Memory] Remembered customer name: {info['name']}")
+        else:
+            # Try pattern matching
+            for pattern in name_patterns:
+                if pattern in msg_lower:
+                    idx = msg_lower.find(pattern) + len(pattern)
+                    remaining = message[idx:].strip()
+                    words = remaining.split()
+                    if words:
+                        potential_name = []
+                        for word in words[:3]:
+                            clean_word = word.strip('.,!?')
+                            # Stop at punctuation or stop words
+                            if not clean_word or clean_word.lower() in stop_words:
+                                break
+                            if clean_word[0].isupper():
+                                potential_name.append(clean_word)
+                            else:
+                                break
+                        if potential_name:
+                            info["name"] = " ".join(potential_name)
+                            print(f"[Memory] Remembered customer name: {info['name']}")
+                            break
+
+        # Extract phone number patterns
+        phone_match = re.search(r'(\d{3}[-.\s]?\d{3}[-.\s]?\d{4}|\(\d{3}\)\s*\d{3}[-.\s]?\d{4})', message)
+        if phone_match:
+            info["phone"] = phone_match.group(1)
+            print(f"[Memory] Remembered phone: {info['phone']}")
+
+        # Extract email patterns
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', message)
+        if email_match:
+            info["email"] = email_match.group(0)
+            print(f"[Memory] Remembered email: {info['email']}")
+        
+        # Extract party size
+        party_patterns = [
+            r'(\d+)\s*(?:people|persons|guests|of us)',
+            r'party of (\d+)',
+            r'table for (\d+)',
+            r'room for (\d+)',
+            r'for (\d+)\b',
+            r'(\d+)\s*(?:adults?|kids?|children)',
+        ]
+        for pattern in party_patterns:
+            match = re.search(pattern, msg_lower)
+            if match:
+                info["party_size"] = match.group(1)
+                print(f"[Memory] Remembered party size: {info['party_size']}")
+                break
+        
+        # Extract full date mentions (more comprehensive)
+        # Month + day patterns
+        month_day = re.search(
+            r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?',
+            msg_lower
+        )
+        if month_day:
+            month = month_day.group(1).title()
+            day = month_day.group(2)
+            year = month_day.group(3) or "2025"
+            info["reservation_date"] = f"{month} {day}, {year}"
+            print(f"[Memory] Remembered reservation date: {info['reservation_date']}")
+        else:
+            # Try other date patterns
+            date_patterns = [
+                (r'(today|tonight)', "today"),
+                (r'(tomorrow)', "tomorrow"),
+                (r'(this weekend)', "this weekend"),
+                (r'(next week)', "next week"),
+                (r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)', None),
+                (r'(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)', None),
+            ]
+            for pattern, replacement in date_patterns:
+                match = re.search(pattern, msg_lower)
+                if match:
+                    info["reservation_date"] = replacement or match.group(1).title()
+                    print(f"[Memory] Remembered reservation date: {info['reservation_date']}")
+                    break
+        
+        # Extract time mentions - must have am/pm or be followed by "o'clock"
+        time_patterns = [
+            r'(\d{1,2}:\d{2}\s*(?:am|pm|a\.m\.|p\.m\.))',  # 8:00pm
+            r'(\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.))',  # 8pm
+            r'(\d{1,2}\s*o\'?clock)',  # 8 o'clock
+            r'at\s+(\d{1,2})\b(?!\s*(?:st|nd|rd|th|people|guests|person))',  # at 8 (not "at 25th")
+        ]
+        for pattern in time_patterns:
+            time_match = re.search(pattern, msg_lower)
+            if time_match:
+                info["reservation_time"] = time_match.group(1)
+                print(f"[Memory] Remembered reservation time: {info['reservation_time']}")
+                break
+
+        # Extract location/seating preference
+        location_patterns = [
+            (r'\b(terrace|patio|outdoor|outside)\b', "outdoor terrace"),
+            (r'\b(indoor|inside)\b', "indoor"),
+            (r'\b(private room|private dining)\b', "private room"),
+            (r'\b(bar|counter)\b', "bar area"),
+            (r'\b(window|by the window)\b', "window seat"),
+        ]
+        for pattern, location in location_patterns:
+            if re.search(pattern, msg_lower):
+                info["seating_preference"] = location
+                print(f"[Memory] Remembered seating preference: {info['seating_preference']}")
+                break
+        
+        # Detect if this is a booking/reservation request OR they claim to have one
+        booking_keywords = ['book', 'reserve', 'reservation', 'appointment', 'schedule', 'make a']
+        has_reservation_phrases = ['my reservation', 'my appointment', 'my booking', 'i have a reservation', 
+                                   'i have an appointment', 'i booked', 'i reserved', 'i made a reservation']
+        
+        if any(kw in msg_lower for kw in booking_keywords):
+            info["has_reservation"] = True
+            print(f"[Memory] Noted: Customer is making a reservation")
+        
+        if any(phrase in msg_lower for phrase in has_reservation_phrases):
+            info["claims_existing_reservation"] = True
+            print(f"[Memory] Noted: Customer claims to have an existing reservation")
+    
+    def _lookup_customer_in_db(self, session_id: str):
+        """Look up customer in global database if we have their name."""
+        if session_id not in self.conversations:
+            return
+        
+        info = self.conversations[session_id]["customer_info"]
+        name = info.get("name")
+        
+        if not name:
+            return
+        
+        # Look up in global database
+        stored = customer_db.find_customer(name)
+        if stored:
+            print(f"[Memory] Found {name} in database! Restoring their info...")
+            # Merge stored data into current session (don't overwrite existing non-empty values)
+            for key, value in stored.items():
+                if value and (key not in info or not info.get(key)):
+                    info[key] = value
+                    print(f"[Memory] Restored: {key} = {value}")
+            
+            # Mark that we found them
+            info["found_in_database"] = True
+    
+    def _save_customer_to_db(self, session_id: str):
+        """Save customer info to global database for future sessions."""
+        if session_id not in self.conversations:
+            return
+        
+        info = self.conversations[session_id]["customer_info"]
+        name = info.get("name")
+        
+        if not name:
+            return
+        
+        # Save if we have ANY meaningful data (name + anything else)
+        has_data = (info.get("reservation_date") or info.get("reservation_time") or 
+                    info.get("party_size") or info.get("has_reservation") or
+                    info.get("seating_preference") or info.get("phone") or info.get("email"))
+        
+        if has_data:
+            print(f"[Memory] Saving {name} to database with: {info}")
+            customer_db.save_customer(name, info)
+    
+    def _extract_from_confirmation(self, session_id: str, message: str):
+        """Extract booking details from agent confirmation messages."""
+        conv = self.conversations[session_id]
+        info = conv["customer_info"]
+        msg_lower = message.lower()
+        
+        # Check if this is a confirmation message
+        confirmation_keywords = ['reserved', 'booked', 'confirmed', 'all set', 'appointment is']
+        if not any(kw in msg_lower for kw in confirmation_keywords):
+            return
+        
+        info["has_reservation"] = True
+        
+        # Extract date from confirmation if not already captured
+        if "reservation_date" not in info:
+            month_day = re.search(
+                r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?',
+                msg_lower
+            )
+            if month_day:
+                info["reservation_date"] = f"{month_day.group(1).title()} {month_day.group(2)}"
+                print(f"[Memory] Extracted confirmed date: {info['reservation_date']}")
+            else:
+                # Try simpler patterns
+                simple_date = re.search(r'(tonight|today|tomorrow|this evening)', msg_lower)
+                if simple_date:
+                    info["reservation_date"] = simple_date.group(1)
+                    print(f"[Memory] Extracted confirmed date: {info['reservation_date']}")
+        
+        # Extract time from confirmation if not already captured
+        if "reservation_time" not in info:
+            time_match = re.search(r'at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|p\.m\.|a\.m\.)?)', msg_lower)
+            if time_match:
+                info["reservation_time"] = time_match.group(1)
+                print(f"[Memory] Extracted confirmed time: {info['reservation_time']}")
+        
+        # Extract party size from confirmation if not already captured
+        if "party_size" not in info:
+            party_match = re.search(r'(?:for|party of)\s+(\d+)|(\d+)\s+(?:people|guests)', msg_lower)
+            if party_match:
+                info["party_size"] = party_match.group(1) or party_match.group(2)
+                print(f"[Memory] Extracted confirmed party size: {info['party_size']}")
+    
+    def clear(self, session_id: str):
+        """Clear conversation history for a session."""
+        if session_id in self.conversations:
+            del self.conversations[session_id]
+    
+    def get_memory_summary(self, session_id: str) -> str:
+        """Get a summary of remembered customer information."""
+        if session_id not in self.conversations:
+            return ""
+        
+        info = self.conversations[session_id]["customer_info"]
+        if not info:
+            return ""
+        
+        found_in_db = info.get("found_in_database", False)
+        if found_in_db:
+            parts = ["[RETURNING CUSTOMER - We found their information from a previous visit! Use this data:]"]
+        else:
+            parts = ["[CUSTOMER INFORMATION - Use this in your responses]"]
+        
+        if "name" in info:
+            parts.append(f"- Customer's name: {info['name']} (Address them by name!)")
+        
+        # Build reservation summary if we have any booking details
+        reservation_parts = []
+        if info.get("has_reservation") or info.get("reservation_date") or info.get("reservation_time"):
+            reservation_parts.append("- RESERVATION DETAILS (Customer made this booking in this conversation):")
+            if "reservation_date" in info:
+                reservation_parts.append(f"  * Date: {info['reservation_date']}")
+            if "reservation_time" in info:
+                reservation_parts.append(f"  * Time: {info['reservation_time']}")
+            if "party_size" in info:
+                reservation_parts.append(f"  * Party size: {info['party_size']} people")
+            if "seating_preference" in info:
+                reservation_parts.append(f"  * Seating: {info['seating_preference']}")
+            parts.extend(reservation_parts)
+        elif "party_size" in info:
+            parts.append(f"- Party size mentioned: {info['party_size']} people")
+        
+        if "phone" in info:
+            parts.append(f"- Phone number: {info['phone']}")
+        if "email" in info:
+            parts.append(f"- Email: {info['email']}")
+        
+        if len(parts) > 1:
+            parts.append("\nIMPORTANT: When the customer asks about their reservation/appointment, tell them the EXACT details from above. You already have this information from their previous visit - use it!")
+            parts.append("Say something like 'Yes, I have your reservation right here!' and give them the specific details.")
+        
+        return "\n".join(parts) if len(parts) > 1 else ""
+    
+    def has_reservation_info(self, session_id: str) -> bool:
+        """Check if we have any reservation details stored."""
+        if session_id not in self.conversations:
+            return False
+        info = self.conversations[session_id]["customer_info"]
+        return info.get("has_reservation") or info.get("reservation_date") or info.get("reservation_time")
+    
+    def build_full_context(self, session_id: str, current_message: str) -> str:
+        """Build the complete context string for the API call."""
+        if session_id not in self.conversations:
+            return current_message
+        
+        conv = self.conversations[session_id]
+        parts = []
+        
+        # System prompt / Role definition
+        parts.append(f"[YOUR ROLE AND INSTRUCTIONS]\n{conv['system_prompt']}")
+        
+        # Memory summary (key customer facts)
+        memory = self.get_memory_summary(session_id)
+        if memory:
+            parts.append(f"\n{memory}")
+        
+        # Conversation history
+        if conv["messages"]:
+            parts.append("\n[CONVERSATION HISTORY]")
+            for msg in conv["messages"]:
+                if msg["role"] == "user":
+                    parts.append(f"Customer: {msg['content']}")
+                elif msg["role"] == "assistant":
+                    parts.append(f"You (Agent): {msg['content']}")
+        
+        # Current message
+        parts.append(f"\n[CURRENT MESSAGE FROM CUSTOMER]")
+        parts.append(f"Customer: {current_message}")
+        
+        # Check if customer is asking about a reservation we don't have
+        has_reservation = self.has_reservation_info(session_id)
+        
+        # Instructions for response
+        parts.append(f"""
+[RESPONSE INSTRUCTIONS]
+1. Respond naturally as if on a phone call - be conversational and warm
+2. Keep your response concise (2-3 sentences typically)
+3. IMPORTANT: Use the customer's name if you know it - this shows you remember them
+4. Reference any previous information from the conversation when relevant
+5. Do not include role labels like "Agent:" or "You:" - just speak directly
+6. If the customer gave their name earlier, address them by name
+
+[HANDLING RESERVATION LOOKUPS]
+{"You have the customer's reservation details above - use them!" if has_reservation else '''If a customer says they have an existing reservation and provides their name or details:
+1. ROLE-PLAY as if you found their reservation in your system
+2. Confirm back the details they gave you (name, date, time, party size)
+3. If they only gave partial info (like just a name), ask for more details to "locate" their booking
+4. Once you have enough details, confirm: "Yes, I found your reservation! [repeat their details back]"
+5. NEVER say "I don't have access to reservations" - you ARE the reservation system
+6. Be helpful and act as if you successfully looked up their booking'''
+}""")
+
+        return "\n".join(parts)
+
+
+# Global conversation manager instance
+conversation_manager = ConversationManager()
